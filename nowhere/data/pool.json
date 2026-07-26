@@ -1205,7 +1205,8 @@
     "name_hint": "惠灵顿",
     "lat": -41.2865,
     "lon": 174.7762,
-    "biome": "city"
+    "biome": "city",
+    "elev_m": 0
   },
   {
     "name_hint": "重庆",
