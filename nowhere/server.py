@@ -184,7 +184,7 @@ async def _get_radio(lat: float, lon: float) -> dict | None:
         if _km((lat, lon), _state.radio_pos) < 50.0:
             return _state.radio_station
     cc = country.country_code_of(lat, lon)
-    station = await radio.nearest(lat, lon, cc)
+    station = await asyncio.wait_for(radio.nearest(lat, lon, cc), timeout=8.0)
     if station is not None:
         _state.radio_station = station
         _state.radio_pos = (lat, lon)
@@ -533,14 +533,15 @@ async def _gather_env(lat: float, lon: float, dt: datetime) -> dict[str, Any]:
         asyncio.to_thread(terrain.surface, lat, lon),
         asyncio.to_thread(sky.sun_moon, lat, lon, dt),
         asyncio.to_thread(sky.visible_sky, lat, lon, dt, _rng),
-        weather.current(lat, lon, elevation=elev, local_hour=local_hour),
+        asyncio.wait_for(weather.current(lat, lon, elevation=elev, local_hour=local_hour), timeout=10.0),
         _get_radio(lat, lon),
         asyncio.wait_for(hydrology.nearby_water(lat, lon), timeout=5.0),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     def _ok(i: int, default: Any = None) -> Any:
-        return results[i] if not isinstance(results[i], Exception) else default
+        # BaseException catches CancelledError (not Exception subclass in 3.12)
+        return results[i] if not isinstance(results[i], BaseException) else default
 
     surf: str = _ok(0, "unknown")
     sun_moon_info: dict = _ok(1, {})
@@ -715,7 +716,7 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
                 lat, lon = h_place["lat"], h_place["lon"]
                 place_name = to
             else:
-                result = await geocode.lookup(to)
+                result = await asyncio.wait_for(geocode.lookup(to), timeout=10.0)
                 if result is None:
                     return {"text": f"找不到「{to}」。", "data": {"error": "not_found"}}
                 lat, lon = result
@@ -782,7 +783,7 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
     # Sea surface temperature
     sst_text = ""
     try:
-        sst = await water.sea_surface_temp(lat, lon)
+        sst = await asyncio.wait_for(water.sea_surface_temp(lat, lon), timeout=8.0)
         if sst is not None:
             sst_text = water.describe_sst(sst, _rng)
     except Exception:
@@ -792,7 +793,7 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
     marine_text = ""
     if _rng.random() < 0.3:
         try:
-            m = await water.marine_life(lat, lon, _rng)
+            m = await asyncio.wait_for(water.marine_life(lat, lon, _rng), timeout=8.0)
             if m:
                 marine_text = f"{m['common_name']}。{m['distance_m']}米外。{m['scene']}"
         except Exception:
@@ -971,7 +972,10 @@ def _load_souvenirs_by_place() -> dict:
         import json as _json
         import pathlib as _pathlib
         fp = _pathlib.Path(__file__).resolve().parent / "data" / "souvenirs_by_place.json"
-        _SOUVENIRS_BY_PLACE = _json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else {}
+        try:
+            _SOUVENIRS_BY_PLACE = _json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else {}
+        except Exception:
+            _SOUVENIRS_BY_PLACE = {}
     return _SOUVENIRS_BY_PLACE
 
 
@@ -1088,7 +1092,7 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
 
     sst_text = ""
     try:
-        sst = await water.sea_surface_temp(lat, lon)
+        sst = await asyncio.wait_for(water.sea_surface_temp(lat, lon), timeout=8.0)
         if sst is not None:
             sst_text = water.describe_sst(sst, _rng)
     except Exception:
@@ -1097,7 +1101,7 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
     marine_text = ""
     if _rng.random() < 0.3:
         try:
-            m = await water.marine_life(lat, lon, _rng)
+            m = await asyncio.wait_for(water.marine_life(lat, lon, _rng), timeout=8.0)
             if m:
                 marine_text = f"{m['common_name']}。{m['distance_m']}米外。{m['scene']}"
         except Exception:
@@ -1518,9 +1522,9 @@ async def look_around_impl() -> dict:
         _BIOME_RADIUS = {"city": 2, "mountain": 10, "volcano": 10, "island": 8, "coast": 8}
         radius = _BIOME_RADIUS.get(_state.biome or "", 15)
         current_month = now.month if now else None
-        life_result = await life.nearby(lat, lon, night=night, weather_text=weather_text,
+        life_result = await asyncio.wait_for(life.nearby(lat, lon, night=night, weather_text=weather_text,
                                         radius_km=radius, biome=_state.biome, rng=_rng,
-                                        month=current_month)
+                                        month=current_month), timeout=10.0)
         if life_result and (life_result.get("distance_m") or 999) < 3000:
             placememory.record_sighting(
                 name=life_result.get("name", ""),
@@ -1537,7 +1541,7 @@ async def look_around_impl() -> dict:
         mood = (_state.last_env or {}).get("weather", {}).get("precip", "calm")
         if not mood or mood.lower() in ("none", ""):
             mood = "calm"
-        art_result = await art.match(lat, lon, mood, _rng)
+        art_result = await asyncio.wait_for(art.match(lat, lon, mood, _rng), timeout=10.0)
         if art_result:
             sections.append(describe.render("art", art_result, None, _rng))
 
@@ -1685,15 +1689,15 @@ async def ask_impl(topic: str) -> dict:
         return {"text": "还没开门呢。先 open_door 吧。", "data": {"error": "not_landed"}}
 
     lat, lon = _state.pos
-    result = await knowledge.about(lat, lon, topic)
+    result = await asyncio.wait_for(knowledge.about(lat, lon, topic), timeout=10.0)
     if not result and not topic:
         # Place-specific lookup failed; try broader context via place_name
         if _state.place_name:
-            result = await knowledge.about(lat, lon, _state.place_name)
+            result = await asyncio.wait_for(knowledge.about(lat, lon, _state.place_name), timeout=10.0)
     if not result and topic:
         # Try place_name + topic combination (e.g. "京都 金阁寺")
         if _state.place_name and _state.place_name not in topic:
-            result = await knowledge.about(lat, lon, f"{_state.place_name} {topic}")
+            result = await asyncio.wait_for(knowledge.about(lat, lon, f"{_state.place_name} {topic}"), timeout=10.0)
     if not result:
         return {"text": "关于这个,这里没有留下文字。", "data": {}}
 

@@ -14,7 +14,7 @@ _ENCOUNTER_FILE = "encounters.txt"
 
 # Tags that appear in the merged encounter file.
 _KNOWN_TAGS = frozenset(
-    {"polar", "africa", "asia", "americas", "europe", "art", "natural"}
+    {"polar", "africa", "asia", "americas", "europe", "oceania", "art", "natural"}
 )
 
 # Biome keywords that qualify as "urban" (art encounters mixed in).
@@ -79,9 +79,11 @@ def _region_for(biome: str, lat: float, lon: float) -> str:
     if -55 <= lat <= 70 and -170 <= lon <= -30:
         return "americas"
 
-    # Oceania folds into americas pool
+    # Oceania (Australia, NZ, Pacific)
     if -50 <= lat <= 0 and 110 <= lon <= 180:
-        return "americas"
+        return "oceania"
+    if -48 <= lat <= -10 and 160 <= lon <= 180:
+        return "oceania"
 
     if 35 <= lat <= 72 and -15 <= lon <= 40:
         return "europe"

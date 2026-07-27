@@ -98,15 +98,20 @@ def _get_zim():
         logger.warning("ZIM file not found: %s", _ZIM_PATH)
         return None
     try:
-        # Suppress gevent's noisy atexit KeyError from zimply's monkey-patching
+        # zimply imports gevent which calls monkey.patch_all().
+        # On exit, gevent's cleanup throws KeyError from destroyed thread state.
+        # Suppress stderr during atexit to hide the traceback.
         import atexit
-        import threading
-        _orig_excepthook = threading.excepthook
-        def _silent_thread_excepthook(args):
-            if isinstance(args.exc_value, KeyError):
-                return  # suppress gevent cleanup KeyError
-            _orig_excepthook(args)
-        threading.excepthook = _silent_thread_excepthook
+        import os
+        import sys
+
+        def _suppress_gevent_cleanup():
+            try:
+                sys.stderr = open(os.devnull, "w")
+            except Exception:
+                pass
+
+        atexit.register(_suppress_gevent_cleanup)
 
         from zimply.zimply import ZIMFile
         _zim = ZIMFile(str(_ZIM_PATH), encoding="utf-8")
