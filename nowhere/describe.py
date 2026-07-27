@@ -395,8 +395,8 @@ def _pick_scene(pool: list[str], name: str, rng: random.Random, ctx: dict) -> st
         high_bad = ["公园", "湖面", "鸭子", "水泥地", "人行道", "路灯", "便利店", "地铁", "小区", "洒水车"]
         filtered = [s for s in filtered if not any(k in s for k in high_bad)]
 
-    # Non-tropical: no tropical scenes
-    if abs_lat >= 30:
+    # Non-tropical: no tropical scenes (tropic of cancer/capricorn ~23.5°)
+    if abs_lat >= 24:
         tropical_bad = ["椰子", "棕榈", "芭蕉", "热带", "芒果", "榴莲"]
         filtered = [s for s in filtered if not any(k in s for k in tropical_bad)]
 
@@ -953,11 +953,12 @@ def sanity_check(text: str, env: dict) -> str:
         if "太阳" in text and "落" not in text and "没" not in text:
             text = text.replace("太阳", "月亮")
 
-    # Summer: remove frozen/ice references
+    # Summer: soften frozen/ice references (but keep glacier/polar scenes intact)
     if season in ("summer", "spring"):
-        for ice in ("冻住了", "冰面", "冰冻", "结冰"):
-            if ice in text:
-                text = text.replace(ice, "水面")
+        if biome not in ("tundra", "glacier", "polar"):
+            for old, new in [("冻住了", "泛着光"), ("冰冻的湖面", "湖面"), ("结冰了", "泛着凉意")]:
+                if old in text:
+                    text = text.replace(old, new)
 
     return text
 
@@ -1232,7 +1233,7 @@ _ART_SCENE: list[str] = [
     "不知道是它映了这地方，还是这地方映了它。",
     "在这儿遇见它，像是被安排的。",
     "原作不在这里，但感觉在。",
-    "此刻看它，比任何时候都合适。",
+    "光打在画上的角度，跟旁边的影子对上了。",
 ]
 
 

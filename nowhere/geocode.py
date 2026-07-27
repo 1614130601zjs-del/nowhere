@@ -93,8 +93,9 @@ async def lookup(place: str) -> tuple[float, float] | None:
 
     # Special places (continents, oceans, poles, etc.)
     special = _load_special()
-    if place in special:
-        result = (special[place]["lat"], special[place]["lon"])
+    sp = special.get(place) or special.get(key) or special.get(place.strip())
+    if sp is not None:
+        result = (sp["lat"], sp["lon"])
         _geocode_cache[key] = result
         return result
 

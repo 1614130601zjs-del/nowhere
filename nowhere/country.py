@@ -45,7 +45,14 @@ def country_code_of(lat: float, lon: float) -> str | None:
     best_cc: str | None = None
     best_d = math.inf
     for clat, clon, cc in _cities:
-        d = (clat - lat) ** 2 + ((clon - lon) * math.cos(math.radians(lat))) ** 2
+        dlat = clat - lat
+        dlon = clon - lon
+        # Wrap longitude at date line (e.g. 179 to -179 is 2 degrees, not 358)
+        if dlon > 180:
+            dlon -= 360
+        elif dlon < -180:
+            dlon += 360
+        d = dlat ** 2 + (dlon * math.cos(math.radians(lat))) ** 2
         if d < best_d:
             best_d = d
             best_cc = cc

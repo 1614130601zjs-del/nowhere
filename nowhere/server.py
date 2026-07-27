@@ -374,7 +374,9 @@ def _pick_discovery(rng: random.Random) -> str:
     # Filter out scenes that don't match the current biome
     biome = _state.biome or ""
     surface = _last_env_surface()
-    elev = (_state.last_env or {}).get("elevation", 0)
+    # last_env is nested: {"terrain": {"elevation": ...}, ...}
+    _terrain_env = (_state.last_env or {}).get("terrain", {})
+    elev = _terrain_env.get("elevation", 0) if isinstance(_terrain_env, dict) else 0
 
     # Water scenes are inappropriate in deserts and dry areas
     water_keywords = ["瀑布", "溪", "河", "湖", "海", "水帘", "湿地", "溪水"]
@@ -632,12 +634,13 @@ def _build_salience_candidates(
             "payload": w,
         })
 
-    # terrain
+    # terrain -- values may be nested under env["terrain"] or at top level
+    _t = env.get("terrain", {}) if isinstance(env.get("terrain"), dict) else {}
     t = {
-        "surface": env.get("surface", "unknown"),
-        "elevation": env.get("elevation", 0),
-        "slope_deg": env.get("slope_deg", 0),
-        "elevation_delta": env.get("elevation_delta", 0),
+        "surface": env.get("surface", _t.get("surface", "unknown")),
+        "elevation": env.get("elevation", _t.get("elevation", 0)),
+        "slope_deg": env.get("slope_deg", _t.get("slope_deg", 0)),
+        "elevation_delta": env.get("elevation_delta", _t.get("elevation_delta", 0)),
     }
     candidates.append({
         "kind": "terrain",
@@ -1770,6 +1773,7 @@ async def walk_to_impl(place: str) -> dict:
 
     # ── 走路：关键节点叙事 ───────────────────────────────────────────
     steps = 0
+    total_km = 0.0
     max_steps = max(3, min(10, int(dist / 5) + 1))
     # last_env 在 walk_impl/look_around_impl/wait_impl 里写成嵌套:
     #   {"weather": ..., "terrain": {"elevation", "surface"}, "sky": ...}
@@ -1789,8 +1793,10 @@ async def walk_to_impl(place: str) -> dict:
             break
 
         bearing_deg = places._bearing_deg(lat, lon, target["lat"], target["lon"])
-        step_result = walk_mod.step(_state, bearing_deg, None, min(5.0, remaining))
+        step_km = min(5.0, remaining)
+        step_result = walk_mod.step(_state, bearing_deg, None, step_km)
         steps += 1
+        total_km += step_km
 
         if step_result.get("blocked"):
             lines.append(describe.render("blocked", {"reason": step_result.get("reason", "障碍")}, None, _rng))
@@ -1832,7 +1838,7 @@ async def walk_to_impl(place: str) -> dict:
     remaining = places._haversine_km(_state.pos[0], _state.pos[1], target["lat"], target["lon"])
     if remaining < 1.0:
         _arrival_templates = [
-            f"到了。{place}。你走了{steps * 2}公里。远处有炊烟，你知道到家了。",
+            f"到了。{place}。你走了{total_km:.0f}公里。远处有炊烟，你知道到家了。",
             f"{place}到了。你站在那里看了一会儿。路走完了，但故事没有。",
             f"你走进{place}。空气里的味道变了。你知道到了。",
             f"到了。{place}。你停下来，深吸了一口气。{target.get('type', '')}。",
@@ -1862,6 +1868,8 @@ async def walk_to_impl(place: str) -> dict:
         "terrain": {"elevation": env.get("elevation"), "surface": env.get("surface")},
         "sky": env.get("sky"),
     }
+    _state.last_surface = env.get("surface", "")
+    _state.last_elevation = env.get("elevation", 0)
     _state.save()
 
     text = "\n".join(lines)
