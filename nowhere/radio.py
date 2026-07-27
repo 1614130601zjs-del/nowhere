@@ -195,7 +195,7 @@ async def nearest(lat: float, lon: float, country_code: str | None) -> dict | No
                             "stream_url": st.get("url_resolved", st.get("url", "")),
                             "homepage": st.get("homepage", ""),
                         }
-                except (httpx.HTTPError, httpx.TimeoutException):
+                except (httpx.HTTPError, httpx.TimeoutException, ValueError):
                     continue
 
     # ── Fallback ─────────────────────────────────────────────────────

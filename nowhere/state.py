@@ -112,10 +112,16 @@ class WorldState:
             s.last_surface = data.get("last_surface")
             s.last_elevation = data.get("last_elevation", 0.0)
             s.steps_since_discovery = data.get("steps_since_discovery", 0)
-            s.narrative = data.get("narrative", {
+            _default_narrative = {
                 "direction": None, "distance_walked": 0,
                 "last_feature": None, "discoveries": [], "mood": "neutral",
-            })
+            }
+            loaded_narrative = data.get("narrative", {})
+            if isinstance(loaded_narrative, dict):
+                # Merge with defaults to handle incomplete/corrupted saves
+                s.narrative = {**_default_narrative, **loaded_narrative}
+            else:
+                s.narrative = _default_narrative
             s.recent_scenes = data.get("recent_scenes", [])
             s.postcards = data.get("postcards", [])
             s.radio_station = data.get("radio_station")

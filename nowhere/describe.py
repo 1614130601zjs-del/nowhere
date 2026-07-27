@@ -941,6 +941,7 @@ def sanity_check(text: str, env: dict) -> str:
     precip = weather.get("precip", "none")
     wind = weather.get("wind_ms", 0)
     season = env.get("_season", "")
+    biome = env.get("biome", "")
 
     # Storm: remove calm bird descriptions
     if wind >= 15:
@@ -1370,6 +1371,7 @@ _SMELL_BY_BIOME: dict[str, list[str]] = {
     "volcano": ["硫磺的味道，刺鼻", "热石头的味道，像铁", "蒸汽带着矿物质的涩"],
     "wetland": ["腐殖质的味道，浓的", "水草的腥味", "泥巴的味道，潮的"],
     "snow": ["冷空气，干净得发苦", "雪化成水的味道，带一点泥土", "风里什么都没有，但你知道那是雪"],
+    "water": ["海风里的咸味", "水汽带着泥腥", "空气湿得能拧出水"],
 }
 
 _TOUCH_BY_SURFACE: dict[str, list[str]] = {
@@ -1381,6 +1383,9 @@ _TOUCH_BY_SURFACE: dict[str, list[str]] = {
     "urban": ["脚下的路面被磨得光滑", "地面是硬的，踩上去没有弹性"],
     "water_ocean": ["浪打在脚背上，凉的", "脚趾间的沙被吸走"],
     "water_fresh": ["水凉得刺骨", "河底的石头滑，你差点摔倒"],
+    "bare": ["碎石在脚下滑动", "地面干裂，踩上去碎了一层"],
+    "ice": ["脚底打滑，你重心往前倾", "冰面嘎吱响，像踩在玻璃上"],
+    "wetland": ["脚陷进泥里，拔出来咕的一声", "水草缠住了脚踝"],
 }
 
 
