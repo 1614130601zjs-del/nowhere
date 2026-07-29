@@ -60,7 +60,12 @@ def _pick_semantic_bearing(
         if semantic == "uphill":
             score = delta  # maximize elevation gain
         elif semantic == "toward_sea":
-            score = -delta  # maximize elevation drop
+            # Use actual water detection, not just elevation drop
+            water_dist = water_ahead_km(lat, lon, bearing, max_km=20.0)
+            if water_dist is not None:
+                score = 100.0 - water_dist  # closer water = higher score
+            else:
+                score = -delta  # fallback: elevation drop as proxy
         else:
             score = 0.0
 
@@ -74,6 +79,8 @@ def _pick_semantic_bearing(
 
 def best_uphill_gain(state: WorldState, dist_km: float = 2.0) -> float:
     """8 个方向里最大的海拔增益(米)。平地返回 <=0。"""
+    if state.pos is None:
+        return 0.0
     lat, lon = state.pos
     _, best_delta = _pick_semantic_bearing(lat, lon, "uphill", dist_km)
     return best_delta
@@ -157,7 +164,6 @@ def step(
     climbed = elev_delta > 0
 
     # ── Water transition ─────────────────────────────────────────────
-    was_water = terrain.is_water(lat, lon)
     now_water = terrain.is_water(new_lat, new_lon)
     entered_water = False
 

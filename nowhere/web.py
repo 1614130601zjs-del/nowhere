@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -75,7 +76,18 @@ async def state(_request: Request) -> JSONResponse:
 
     local_time: str | None = None
     now = s.now()
-    if now is not None:
+    if now is not None and pos is not None:
+        try:
+            from timezonefinder import TimezoneFinder
+            tz_name = TimezoneFinder().timezone_at(lat=pos[0], lng=pos[1])
+            if tz_name:
+                local_dt = now.astimezone(ZoneInfo(tz_name))
+                local_time = local_dt.isoformat()
+            else:
+                local_time = now.isoformat()
+        except Exception:
+            local_time = now.isoformat()
+    elif now is not None:
         local_time = now.isoformat()
 
     # radio from last_env

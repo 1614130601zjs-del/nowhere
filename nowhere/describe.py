@@ -1392,7 +1392,7 @@ _TOUCH_BY_SURFACE: dict[str, list[str]] = {
 def _season(month: int, lat: float) -> str:
     """Get season name from month and latitude. Northern hemisphere default, southern flipped."""
     if lat < 0:
-        month = (month + 6) % 12
+        month = ((month - 1 + 6) % 12) + 1
     return ["winter", "winter", "spring", "spring", "spring", "summer",
             "summer", "summer", "autumn", "autumn", "autumn", "winter"][month - 1]
 

@@ -1122,7 +1122,7 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
     # ── 4b. 25% chance: encounter from file ─────────────────────────
     file_encounter_text = ""
     if _rng.random() < 0.25:
-        enc = encounters.draw_encounter(_state.biome or "", lat, lon, _rng)
+        enc = encounters.draw_encounter(_state.biome or "", lat, lon, _rng, place_name=_state.place_name or "")
         if enc:
             file_encounter_text = enc
 

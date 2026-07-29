@@ -92,14 +92,15 @@ def _region_for(biome: str, lat: float, lon: float) -> str:
 
 
 def draw_encounter(
-    biome: str, lat: float, lon: float, rng: random.Random
+    biome: str, lat: float, lon: float, rng: random.Random, place_name: str = ""
 ) -> str | None:
     """Return a random encounter line for the given position, or None.
 
     1. Determine geographic region from lat/lon.
     2. Build a candidate pool: region lines + optional art/natural lines.
-    3. Filter out climate-inappropriate encounters.
-    4. Return a random choice with the ``[tag]`` prefix stripped.
+    3. Filter out city-specific encounters for wrong cities.
+    4. Filter out climate-inappropriate encounters.
+    5. Return a random choice with the ``[tag]`` prefix stripped.
     """
     pools = _load()
     region = _region_for(biome, lat, lon)
@@ -114,6 +115,28 @@ def draw_encounter(
     biome_lower = biome.lower()
     if any(kw in biome_lower for kw in _URBAN_BIOMES):
         candidates.extend(pools.get("art", []))
+
+    # Filter out city-specific encounters for wrong cities.
+    # If an encounter starts with "城市名。" and we're not near that city, remove it.
+    if place_name:
+        _CITY_PREFIXES = [
+            "洛杉矶", "旧金山", "纽约", "休斯敦", "芝加哥", "迈阿密",
+            "伦敦", "巴黎", "柏林", "罗马", "马德里", "巴塞罗那",
+            "东京", "大阪", "首尔", "曼谷", "新加坡", "悉尼", "墨尔本",
+            "迪拜", "伊斯坦布尔", "莫斯科", "孟买", "德里",
+        ]
+        filtered = []
+        for c in candidates:
+            matched_city = False
+            for city in _CITY_PREFIXES:
+                if c.startswith(city + "。") or c.startswith(city + "，"):
+                    if city in place_name or place_name in city:
+                        filtered.append(c)
+                    matched_city = True
+                    break
+            if not matched_city:
+                filtered.append(c)
+        candidates = filtered
 
     # Filter out climate-inappropriate encounters.
     abs_lat = abs(lat)
