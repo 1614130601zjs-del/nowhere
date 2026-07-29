@@ -78,8 +78,7 @@ async def state(_request: Request) -> JSONResponse:
     now = s.now()
     if now is not None and pos is not None:
         try:
-            from timezonefinder import TimezoneFinder
-            tz_name = TimezoneFinder().timezone_at(lat=pos[0], lng=pos[1])
+            tz_name = _server._tf.timezone_at(lat=pos[0], lng=pos[1])
             if tz_name:
                 local_dt = now.astimezone(ZoneInfo(tz_name))
                 local_time = local_dt.isoformat()

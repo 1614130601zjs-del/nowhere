@@ -22,6 +22,17 @@ _URBAN_BIOMES = frozenset(
     {"city", "town", "village", "settlement", "urban", "suburb", "port"}
 )
 
+_CITY_PREFIXES = (
+    "洛杉矶", "旧金山", "纽约", "休斯敦", "芝加哥", "迈阿密", "华盛顿",
+    "伦敦", "曼彻斯特", "爱丁堡", "巴黎", "里昂", "柏林", "慕尼黑", "汉堡",
+    "罗马", "米兰", "威尼斯", "佛罗伦萨", "马德里", "巴塞罗那", "里斯本",
+    "东京", "京都", "大阪", "名古屋", "首尔", "曼谷", "河内", "新加坡",
+    "悉尼", "墨尔本", "奥克兰", "伊斯坦布尔", "莫斯科", "孟买", "德里",
+    "迪拜", "开罗", "开普敦", "约翰内斯堡", "内罗毕", "亚的斯亚贝巴",
+    "拉各斯", "马拉喀什", "卡萨布兰卡", "墨西哥城", "哈瓦那", "波哥大",
+    "利马", "圣地亚哥", "布宜诺斯艾利斯", "里约", "圣保罗",
+)
+
 _POOL: dict[str, list[str]] | None = None
 
 
@@ -116,27 +127,14 @@ def draw_encounter(
     if any(kw in biome_lower for kw in _URBAN_BIOMES):
         candidates.extend(pools.get("art", []))
 
-    # Filter out city-specific encounters for wrong cities.
-    # If an encounter starts with "城市名。" and we're not near that city, remove it.
-    if place_name:
-        _CITY_PREFIXES = [
-            "洛杉矶", "旧金山", "纽约", "休斯敦", "芝加哥", "迈阿密",
-            "伦敦", "巴黎", "柏林", "罗马", "马德里", "巴塞罗那",
-            "东京", "大阪", "首尔", "曼谷", "新加坡", "悉尼", "墨尔本",
-            "迪拜", "伊斯坦布尔", "莫斯科", "孟买", "德里",
-        ]
-        filtered = []
-        for c in candidates:
-            matched_city = False
-            for city in _CITY_PREFIXES:
-                if c.startswith(city + "。") or c.startswith(city + "，"):
-                    if city in place_name or place_name in city:
-                        filtered.append(c)
-                    matched_city = True
-                    break
-            if not matched_city:
-                filtered.append(c)
-        candidates = filtered
+    # Filter out city-specific encounters for wrong cities.  City-qualified
+    # entries use both exact forms ("巴黎。") and compounds ("巴黎咖啡馆。").
+    filtered = []
+    for candidate in candidates:
+        city = next((name for name in _CITY_PREFIXES if candidate.startswith(name)), None)
+        if city is None or not place_name or city in place_name or place_name in city:
+            filtered.append(candidate)
+    candidates = filtered
 
     # Filter out climate-inappropriate encounters.
     abs_lat = abs(lat)

@@ -6,7 +6,7 @@ import json
 import os
 import pathlib
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 _SAVE_DIR = pathlib.Path(os.environ.get("NOWHERE_HOME") or str(pathlib.Path.home() / ".nowhere"))
 _SAVE_FILE = _SAVE_DIR / "journey.json"
@@ -98,6 +98,8 @@ class WorldState:
             s.path = data.get("path", [])
             if data.get("landed_at"):
                 s.landed_at = datetime.fromisoformat(data["landed_at"])
+                if s.landed_at.tzinfo is None:
+                    s.landed_at = s.landed_at.replace(tzinfo=timezone.utc)
             s.elapsed_hours = data.get("elapsed_hours", 0.0)
             s.mode = data.get("mode", "land")
             for m in data.get("messages", []):

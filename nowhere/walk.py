@@ -47,27 +47,24 @@ def _pick_semantic_bearing(
     Returns ``(bearing, best_elevation_delta)``.
     """
     best_bearing = 0.0
-    best_score = -math.inf
+    best_score: tuple[int, float] = (-1, -math.inf)
     best_delta = 0.0
+    e_here = terrain.elevation(lat, lon)
 
     for i in range(8):
         bearing = i * 45.0
         dest_lat, dest_lon = terrain.destination(lat, lon, bearing, dist_km)
-        e_here = terrain.elevation(lat, lon)
         e_dest = terrain.elevation(dest_lat, dest_lon)
         delta = e_dest - e_here
 
         if semantic == "uphill":
-            score = delta  # maximize elevation gain
+            score = (0, delta)  # maximize elevation gain
         elif semantic == "toward_sea":
-            # Use actual water detection, not just elevation drop
-            water_dist = water_ahead_km(lat, lon, bearing, max_km=20.0)
-            if water_dist is not None:
-                score = 100.0 - water_dist  # closer water = higher score
-            else:
-                score = -delta  # fallback: elevation drop as proxy
+            sea_dist = water_ahead_km(lat, lon, bearing, max_km=20.0)
+            # An actual ocean heading always beats an elevation-only proxy.
+            score = (1, -sea_dist) if sea_dist is not None else (0, -delta)
         else:
-            score = 0.0
+            score = (0, 0.0)
 
         if score > best_score:
             best_score = score
@@ -87,11 +84,11 @@ def best_uphill_gain(state: WorldState, dist_km: float = 2.0) -> float:
 
 
 def water_ahead_km(lat: float, lon: float, bearing_deg: float, max_km: float = 20.0) -> float | None:
-    """沿方位往前走,多少公里内能碰到水(每 1km 采样)。碰不到返回 None。"""
+    """沿方位往前走,多少公里内能碰到海洋(每 1km 采样)。碰不到返回 None。"""
     d = 1.0
     while d <= max_km:
         lat2, lon2 = terrain.destination(lat, lon, bearing_deg, d)
-        if terrain.is_water(lat2, lon2):
+        if terrain.surface(lat2, lon2) == "water_ocean":
             return d
         d += 1.0
     return None
@@ -164,13 +161,13 @@ def step(
     climbed = elev_delta > 0
 
     # ── Water transition ─────────────────────────────────────────────
+    was_water = terrain.is_water(lat, lon)
     now_water = terrain.is_water(new_lat, new_lon)
-    entered_water = False
+    entered_water = now_water and not was_water
 
-    if now_water and state.mode == "land":
+    if now_water:
         state.mode = "water"
-        entered_water = True
-    elif not now_water and state.mode == "water":
+    else:
         state.mode = "land"
 
     # ── Time accumulation ────────────────────────────────────────────
@@ -178,7 +175,7 @@ def step(
     if slope_deg > _SLOPE_SLOW_THRESHOLD_DEG:
         speed *= 0.5
     # dist_km is already clamped; use actual_dist for time
-    travel_hours = dist_km / speed
+    travel_hours = actual_dist / speed
     state.elapsed_hours += travel_hours
 
     # ── Update position and path ─────────────────────────────────────
