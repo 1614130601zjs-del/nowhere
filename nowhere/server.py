@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
+import math
 import os
 import random
 import threading
@@ -55,6 +57,7 @@ mcp = FastMCP("nowhere")
 
 _state: state_mod.WorldState = state_mod.WorldState()
 _door_lock = asyncio.Lock()  # open_door 竞态保护:一次只开一扇门
+_action_lock = asyncio.Lock()  # serialize mutations of the shared journey state
 _postcard_counter: int = 0  # 跨门的明信片编号,不走 state 重置
 _rng: random.Random = (
     random.Random(int(os.environ["NOWHERE_SEED"]))
@@ -64,6 +67,16 @@ _rng: random.Random = (
 _web_port: int | None = None  # reserved for Task 11
 _tf: TimezoneFinder = TimezoneFinder()
 _recent_salience_kinds: set[str] = set()  # Bug 4: track recent salience kinds
+
+
+def _serialized_action(func):
+    """Serialize mutations of the process-wide journey state."""
+    @functools.wraps(func)
+    async def wrapped(*args: Any, **kwargs: Any) -> dict:
+        async with _action_lock:
+            return await func(*args, **kwargs)
+    return wrapped
+
 
 # ── Bearing mapping ──────────────────────────────────────────────────
 
@@ -132,10 +145,9 @@ def _load_scene_file(filename: str) -> dict[str, list[str]]:
 
 def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Quick equirectangular distance, good enough for station stickiness."""
-    import math
-
     dlat = math.radians(a[0] - b[0])
-    dlon = math.radians(a[1] - b[1]) * math.cos(math.radians(a[0]))
+    lon_delta = (a[1] - b[1] + 180.0) % 360.0 - 180.0
+    dlon = math.radians(lon_delta) * math.cos(math.radians((a[0] + b[0]) / 2))
     return 6371.0 * math.sqrt(dlat * dlat + dlon * dlon)
 
 
@@ -693,27 +705,38 @@ def _build_salience_candidates(
 
 async def open_door_impl(to: str | None = None, resume: bool = False) -> dict:
     """Open the door and land somewhere."""
-    async with _door_lock:
-        return await _open_door_locked(to, resume=resume)
+    async with _action_lock:
+        async with _door_lock:
+            return await _open_door_locked(to, resume=resume)
 
 
 async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict:
     """Door body, called under _door_lock."""
     global _state, _rng, _recent_salience_kinds
 
-    # ── 1. Locate ────────────────────────────────────────────────────
+    # ── 1. Locate / restore ────────────────────────────────────────────
     spot: dict | None = None
-    if to is None:
+    restored = False
+    if resume:
+        saved = state_mod.WorldState.load()
+        if saved and saved.pos is not None:
+            _state = saved
+            restored = True
+            global _postcard_counter
+            _postcard_counter = max((c.get("id", 0) for c in _state.postcards), default=0)
+            lat, lon = _state.pos
+            place_name = _state.place_name or "未知之地"
+
+    if not restored and to is None:
         spot = landing.random_spot(_rng)
         lat, lon = spot["lat"], spot["lon"]
-        place_name: str = spot.get("name_hint", "未知之地")
-    else:
+        place_name = spot.get("name_hint", "未知之地")
+    elif not restored:
         mark_entry = marks_mod.get(to)
         if mark_entry:
             lat, lon = mark_entry["lat"], mark_entry["lon"]
             place_name = to
         else:
-            # Check humanities.json for matching place name
             h_place = humanities.get_place_coords(to)
             if h_place:
                 lat, lon = h_place["lat"], h_place["lon"]
@@ -726,23 +749,13 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
                 place_name = to
 
     # ── 2. State init ────────────────────────────────────────────────
-    if resume:
-        # Explicit resume: load saved journey if it exists
-        saved = state_mod.WorldState.load()
-        if saved and saved.pos is not None:
-            _state = saved
-            # Restore postcard counter to avoid ID collisions
-            global _postcard_counter
-            _postcard_counter = max((c.get("id", 0) for c in _state.postcards), default=0)
-            lat, lon = _state.pos
-            place_name = _state.place_name or "未知之地"
-        else:
-            _state = state_mod.WorldState()
-            _state.pos = (lat, lon)
-            _state.landed_at = datetime.now(timezone.utc)
-            _state.place_name = place_name
-            _state.biome = spot.get("biome") if spot else None
-    else:
+    if not restored and resume:
+        _state = state_mod.WorldState()
+        _state.pos = (lat, lon)
+        _state.landed_at = datetime.now(timezone.utc)
+        _state.place_name = place_name
+        _state.biome = spot.get("biome") if spot else None
+    elif not resume:
         # Fresh landing (random or named destination): always reset state
         # Preserve seen sets to avoid re-triggering the same cards
         old_seen_cards = _state.seen_cards.copy() if _state else set()
@@ -758,16 +771,19 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
     _state.seen_cards = placememory.seen_cards(place_name)
     _state.seen_humanities = placememory.seen_humanities()
     # 旅程内计数: fresh journey starts at 1, resume continues journey-local count
-    visit_no = _state.record_journey_visit(place_name)
-    # Also record to global placememory for historical tracking
-    placememory.record_visit(place_name)
+    if restored:
+        visit_no = _state.visit_counts.get(place_name, 1)
+    else:
+        visit_no = _state.record_journey_visit(place_name)
+        placememory.record_visit(place_name)
 
     # ── 3. Gather metadata ───────────────────────────────────────────
     env, _ = await _gather_env_cached(lat, lon, _state.now())
-    placememory.record_landing(
-        place_name, lat, lon,
-        elevation=env.get("elevation"), surface=env.get("surface"),
-    )
+    if not restored:
+        placememory.record_landing(
+            place_name, lat, lon,
+            elevation=env.get("elevation"), surface=env.get("surface"),
+        )
 
     # biome 缺失时按地表推(定向开门没有 pool 标签)
     if _state.biome is None:
@@ -899,9 +915,8 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
         prose += f"你落在了{h_card['place']}附近。这里有过——{excerpt}"
 
     _state.last_text = prose
-    _state.save()
 
-    # ── 6. Save env snapshot ─────────────────────────────────────────
+    # ── 6. Save complete state and environment snapshot ───────────────
     _state.last_env = {
         "weather": env.get("weather"),
         "terrain": {
@@ -910,6 +925,9 @@ async def _open_door_locked(to: str | None = None, resume: bool = False) -> dict
         },
         "sky": env.get("sky"),
     }
+    _state.env_pos = (lat, lon)
+    _state.env_at = _state.now()
+    _state.save()
 
     # ── 7. Return ────────────────────────────────────────────────────
     return {
@@ -1015,6 +1033,7 @@ def _pick_souvenir(lat: float, lon: float, env: dict, rng: random.Random) -> dic
     return {"name": item["name"], "from": place or f"{lat:.1f}°,{lon:.1f}°", "desc": item["desc"]}
 
 
+@_serialized_action
 async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dict:
     """Walk one step in the given direction."""
     global _state, _rng, _recent_salience_kinds
@@ -1257,13 +1276,11 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
             prose = f"「{direction}」不是方向，按原方向走了。" + prose
         if step_result.get("clamped"):
             prose = "一步最多 5 公里，按 5 公里走了。" + prose
-    _state.last_text = prose
     # Track recent scene texts for dedup (keep last 5)
     for s in sections:
         if s and len(s) > 10:  # only track substantial texts
             _state.recent_scenes.append(s)
     _state.recent_scenes = _state.recent_scenes[-5:]
-    _state.save()
 
     # ── 6. Update state.last_env ─────────────────────────────────────
     _state.last_env = {
@@ -1285,6 +1302,9 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
             if souvenir:
                 _state.souvenir = souvenir
                 prose += f"\n{ souvenir['desc']}"
+
+    _state.last_text = prose
+    _state.save()
 
     # ── 8. Return ────────────────────────────────────────────────────
     data: dict[str, Any] = {
@@ -1350,6 +1370,7 @@ async def _try_play_stream(stream_url: str, seconds: int) -> bool:
     return False
 
 
+@_serialized_action
 async def listen_impl(seconds: int = 10) -> dict:
     """Listen to the nearest radio station."""
     global _state, _rng
@@ -1377,6 +1398,7 @@ async def listen_impl(seconds: int = 10) -> dict:
     station = await _get_radio(lat, lon)
     if not station:
         _state.last_text = sound_text
+        _state.save()
         return {"text": sound_text + "收不到电台。", "data": {"stream_url": None, "soundscape": sound_text}}
 
     # ── 2. Capture & analyse ─────────────────────────────────────────
@@ -1457,6 +1479,7 @@ async def listen_impl(seconds: int = 10) -> dict:
 
     full_text = sound_text + radio_text
     _state.last_text = full_text
+    _state.save()
 
     return {
         "text": full_text,
@@ -1470,6 +1493,7 @@ async def listen_impl(seconds: int = 10) -> dict:
     }
 
 
+@_serialized_action
 async def look_around_impl() -> dict:
     """Walk around the current location and observe.
 
@@ -1570,9 +1594,11 @@ async def look_around_impl() -> dict:
     # ── Compose ─────────────────────────────────────────────────────
     text = "\n".join(sections)
     _state.last_text = text
+    _state.save()
     return {"text": text, "data": {"exploration": True}}
 
 
+@_serialized_action
 async def wait_impl(hours: float = 1.0) -> dict:
     """原地待着,让时间流过去。每小时感知一次变化。"""
     global _state, _rng
@@ -1595,13 +1621,15 @@ async def wait_impl(hours: float = 1.0) -> dict:
 
     sections: list[str] = []
     prev_env = _state.last_env
-    whole_hours = max(1, int(hours))
     start_temp = (prev_env or {}).get("weather", {}).get("temp_c")
     last_reported_temp = start_temp  # track to avoid repeating the same message
     quiet = True  # 留白: 全程缓存命中且世界没变
-
-    for h in range(whole_hours):
-        _state.elapsed_hours += 1.0
+    remaining_hours = hours
+    h = 0
+    while remaining_hours > 0:
+        elapsed_step = min(1.0, remaining_hours)
+        _state.elapsed_hours += elapsed_step
+        remaining_hours -= elapsed_step
         now = _state.now()
         env, env_cached = await _gather_env_cached(lat, lon, now)
         if not env_cached:
@@ -1637,6 +1665,7 @@ async def wait_impl(hours: float = 1.0) -> dict:
             sections.append(_rng.choice(_wait_scenes))
 
         prev_env = env
+        h += 1
 
     # 留白: 缓存命中且世界没变 → 不再逐项描述
     if quiet:
@@ -1690,6 +1719,11 @@ async def ask_impl(topic: str) -> dict:
 
     if _state.pos is None:
         return {"text": "还没开门呢。先 open_door 吧。", "data": {"error": "not_landed"}}
+    if not isinstance(topic, str):
+        return {"text": "问题必须是文字。", "data": {"error": "bad_topic"}}
+    topic = topic.strip()
+    if len(topic) > 500:
+        return {"text": "问题太长了。", "data": {"error": "topic_too_long"}}
 
     lat, lon = _state.pos
     result = await asyncio.wait_for(knowledge.about(lat, lon, topic), timeout=10.0)
@@ -1707,6 +1741,7 @@ async def ask_impl(topic: str) -> dict:
     return {"text": result.get("extract", ""), "data": result}
 
 
+@_serialized_action
 async def walk_to_impl(place: str) -> dict:
     """朝一个命名地点走。RDR2式旅程叙事：路线预计算→关键节点→到达仪式。"""
     global _state, _rng
@@ -1870,10 +1905,10 @@ async def walk_to_impl(place: str) -> dict:
     }
     _state.last_surface = env.get("surface", "")
     _state.last_elevation = env.get("elevation", 0)
-    _state.save()
 
     text = "\n".join(lines)
     _state.last_text = text
+    _state.save()
     return {
         "text": text,
         "data": {"target": target, "arrived": arrived, "steps": steps, "remaining_km": round(remaining, 1)},
@@ -2031,6 +2066,7 @@ def send_postcard_impl(text: str) -> dict:
     }
     _state.postcards.append(card)
     placememory.save_postcard(card)  # 落盘: 文件是真相,网页旁观者看得见
+    _state.save()
     _poster_front_async(card, lat, lon)
 
     s = card["stamp"]
@@ -2085,9 +2121,11 @@ def reply_postcard_impl(card_id: int, content: str) -> dict:
             card["replies"].append(content)
             placememory.add_postcard_reply(card_id, content)
             _state.messages.append({"content": f"[回信] {content}", "encountered": False})
+            _state.save()
             return {"ok": True}
     if placememory.add_postcard_reply(card_id, content):
         _state.messages.append({"content": f"[回信] {content}", "encountered": False})
+        _state.save()
         return {"ok": True}
     return {"ok": False, "error": "no such postcard"}
 

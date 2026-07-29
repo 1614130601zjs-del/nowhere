@@ -81,6 +81,8 @@ async def fetch_json(
         resp = await client.get(url, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("provider response must be a JSON object")
     except Exception as exc:
         _failure_counts[source] = _failure_counts.get(source, 0) + 1
         if _failure_counts[source] >= CIRCUIT_OPEN_THRESHOLD:

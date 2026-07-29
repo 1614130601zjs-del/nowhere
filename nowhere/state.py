@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import tempfile
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
@@ -74,6 +75,8 @@ class WorldState:
             "souvenir": self.souvenir,
             "postcards": self.postcards[-20:],  # keep last 20
             "radio_station": self.radio_station,
+            "radio_pos": list(self.radio_pos) if self.radio_pos else None,
+            "last_env": self.last_env,
             "env_pos": list(self.env_pos) if self.env_pos else None,
             "env_at": self.env_at.isoformat() if self.env_at else None,
             "visit_counts": self.visit_counts,
@@ -83,7 +86,17 @@ class WorldState:
             "narrative": self.narrative,
             "recent_scenes": self.recent_scenes[-10:],  # keep last 10
         }
-        _SAVE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        fd, tmp_name = tempfile.mkstemp(prefix="journey-", suffix=".tmp", dir=_SAVE_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(payload)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_name, _SAVE_FILE)
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
 
     @classmethod
     def load(cls) -> "WorldState | None":
@@ -127,10 +140,15 @@ class WorldState:
             s.recent_scenes = data.get("recent_scenes", [])
             s.postcards = data.get("postcards", [])
             s.radio_station = data.get("radio_station")
+            if data.get("radio_pos"):
+                s.radio_pos = tuple(data["radio_pos"])
+            s.last_env = data.get("last_env")
             if data.get("env_pos"):
                 s.env_pos = tuple(data["env_pos"])
             if data.get("env_at"):
                 s.env_at = datetime.fromisoformat(data["env_at"])
+                if s.env_at.tzinfo is None:
+                    s.env_at = s.env_at.replace(tzinfo=timezone.utc)
             return s
         except Exception as exc:
             import logging

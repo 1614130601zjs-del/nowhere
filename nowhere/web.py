@@ -16,6 +16,7 @@ POST /postcard/{id}/reply -> 人回明信片
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -130,16 +131,21 @@ async def state(_request: Request) -> JSONResponse:
 
 async def post_message(request: Request) -> JSONResponse:
     """Enqueue a human message into state.messages."""
-    body = await request.json() if await request.body() else {}
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
     content = body.get("content", "")
+    if not isinstance(content, str):
+        return _bad_request("bad_content")
+    content = content.strip()
     if not content:
         return JSONResponse({"ok": False, "error": "empty content"}, status_code=400)
-    # Mirror send_postcard_impl's 1000-char cap so a malicious client can't
-    # fill deque + on-disk JSON with a huge payload.
     if len(content) > 1000:
         return JSONResponse({"ok": False, "error": "too_long"}, status_code=400)
-    _state().messages.append({"content": content, "encountered": False})
-    return JSONResponse({"ok": True, "queued": len(_state().messages)})
+    state = _state()
+    state.messages.append({"content": content, "encountered": False})
+    state.save()
+    return JSONResponse({"ok": True, "queued": len(state.messages)})
 
 
 async def get_messages(_request: Request) -> JSONResponse:
@@ -157,10 +163,17 @@ async def reply_postcard(request: Request) -> JSONResponse:
     from nowhere.server import reply_postcard_impl
 
     card_id = int(request.path_params["card_id"])
-    body = await request.json() if await request.body() else {}
-    content = (body.get("content") or "").strip()
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    content = body.get("content", "")
+    if not isinstance(content, str):
+        return _bad_request("bad_content")
+    content = content.strip()
     if not content:
         return JSONResponse({"ok": False, "error": "empty content"}, status_code=400)
+    if len(content) > 1000:
+        return _bad_request("too_long")
     result = reply_postcard_impl(card_id, content)
     return JSONResponse(result, status_code=200 if result["ok"] else 404)
 
@@ -180,24 +193,64 @@ def _json_or_text(d: dict) -> JSONResponse:
     return JSONResponse(d)
 
 
+def _bad_request(message: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": message}, status_code=400)
+
+
+async def _body(request: Request) -> dict | JSONResponse:
+    if not await request.body():
+        return {}
+    try:
+        body = await request.json()
+    except Exception:
+        return _bad_request("invalid_json")
+    if not isinstance(body, dict):
+        return _bad_request("object_required")
+    return body
+
+
+def _number(body: dict, key: str, default: float) -> float | JSONResponse:
+    value = body.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _bad_request(f"bad_{key}")
+    if not math.isfinite(value):
+        return _bad_request(f"bad_{key}")
+    return float(value)
+
+
 async def api_open_door(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.open_door_impl(to=body.get("to"))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    to = body.get("to")
+    if to is not None and not isinstance(to, str):
+        return _bad_request("bad_to")
+    r = await _server.open_door_impl(to=to)
     return _json_or_text(r)
 
 
 async def api_walk(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.walk_impl(
-        direction=body.get("direction", "forward"),
-        distance_km=body.get("distance_km", 2.0),
-    )
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    direction = body.get("direction", "forward")
+    if not isinstance(direction, str):
+        return _bad_request("bad_direction")
+    distance = _number(body, "distance_km", 2.0)
+    if isinstance(distance, JSONResponse):
+        return distance
+    r = await _server.walk_impl(direction=direction, distance_km=distance)
     return _json_or_text(r)
 
 
 async def api_listen(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.listen_impl(seconds=body.get("seconds", 10))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    seconds = _number(body, "seconds", 10)
+    if isinstance(seconds, JSONResponse):
+        return seconds
+    r = await _server.listen_impl(seconds=int(seconds))
     return _json_or_text(r)
 
 
@@ -207,14 +260,24 @@ async def api_look_around(request: Request) -> JSONResponse:
 
 
 async def api_ask(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.ask_impl(topic=body.get("topic", ""))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    topic = body.get("topic", "")
+    if not isinstance(topic, str):
+        return _bad_request("bad_topic")
+    r = await _server.ask_impl(topic=topic)
     return _json_or_text(r)
 
 
 async def api_send_postcard(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = _server.send_postcard_impl(text=body.get("text", ""))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    text = body.get("text", "")
+    if not isinstance(text, str):
+        return _bad_request("bad_text")
+    r = _server.send_postcard_impl(text=text)
     return _json_or_text(r)
 
 
@@ -223,24 +286,60 @@ async def api_where_am_i(request: Request) -> JSONResponse:
     return _json_or_text(r)
 
 
+async def api_continue(request: Request) -> JSONResponse:
+    if await request.body():
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        if body:
+            return _bad_request("no_arguments_allowed")
+    r = await _server.continue_journey()
+    return _json_or_text(r)
+
+
 async def api_mark(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = _server.mark_impl(
-        name=body.get("name", ""),
-        note=body.get("note", ""),
-    )
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    name = body.get("name", "")
+    note = body.get("note", "")
+    if not isinstance(name, str):
+        return _bad_request("bad_name")
+    if not isinstance(note, str):
+        return _bad_request("bad_note")
+    name = name.strip()
+    if not name:
+        return _bad_request("empty_name")
+    if len(name) > 200 or len(note) > 1000:
+        return _bad_request("too_long")
+    r = _server.mark_impl(name=name, note=note)
     return _json_or_text(r)
 
 
 async def api_walk_to(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.walk_to_impl(place=body.get("place", ""))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    place = body.get("place", "")
+    if not isinstance(place, str):
+        return _bad_request("bad_place")
+    place = place.strip()
+    if not place:
+        return _bad_request("empty_place")
+    if len(place) > 200:
+        return _bad_request("too_long")
+    r = await _server.walk_to_impl(place=place)
     return _json_or_text(r)
 
 
 async def api_wait(request: Request) -> JSONResponse:
-    body = await request.json() if await request.body() else {}
-    r = await _server.wait_impl(hours=body.get("hours", 1.0))
+    body = await _body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    hours = _number(body, "hours", 1.0)
+    if isinstance(hours, JSONResponse):
+        return hours
+    r = await _server.wait_impl(hours=hours)
     return _json_or_text(r)
 
 
@@ -267,6 +366,7 @@ app = Starlette(
         Route("/ask", api_ask, methods=["POST"]),
         Route("/postcard", api_send_postcard, methods=["POST"]),
         Route("/where_am_i", api_where_am_i, methods=["POST"]),
+        Route("/continue", api_continue, methods=["POST"]),
         Route("/mark", api_mark, methods=["POST"]),
         Route("/walk_to", api_walk_to, methods=["POST"]),
         Route("/wait", api_wait, methods=["POST"]),

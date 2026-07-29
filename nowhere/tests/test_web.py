@@ -142,6 +142,30 @@ def test_reply_postcard_cross_process(tmp_path, monkeypatch):
     assert cards[0]["replies"] == ["收到了"]
 
 
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/postcard/43/reply", []),
+        ("/postcard/43/reply", {"content": 1}),
+        ("/mark", []),
+        ("/mark", {"name": 1}),
+        ("/walk_to", []),
+        ("/walk_to", {"place": 1}),
+    ],
+)
+def test_mutation_endpoints_reject_invalid_json_shapes(path, body):
+    c = TestClient(web.app)
+    response = c.post(path, json=body)
+    assert response.status_code == 400
+
+
+def test_mutation_endpoints_reject_malformed_json():
+    c = TestClient(web.app)
+    for path in ("/postcard/43/reply", "/mark", "/walk_to"):
+        response = c.post(path, content="{", headers={"content-type": "application/json"})
+        assert response.status_code == 400
+
+
 def test_delete_postcard(tmp_path, monkeypatch):
     monkeypatch.setenv("NOWHERE_HOME", str(tmp_path))
     from nowhere import placememory

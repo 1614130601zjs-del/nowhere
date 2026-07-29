@@ -1,6 +1,8 @@
 # nowhere/tests/test_providers.py
 import httpx
+import pytest
 from nowhere import providers
+from nowhere.server import _km
 
 async def test_fetch_json_ok(respx_mock):
     respx_mock.get("https://a.com/x").mock(return_value=httpx.Response(200, json={"v": 1}))
@@ -51,3 +53,39 @@ async def test_circuit_breaker_auto_reset(respx_mock, monkeypatch):
     result = await providers.fetch_json("https://f.com/x", source="f")
     assert result == {"v": 3}
     assert providers.provider_status()["f"] == "ok"
+
+
+async def test_non_object_json_is_a_provider_failure(respx_mock):
+    route = respx_mock.get("https://shape.com/x").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    for _ in range(3):
+        assert await providers.fetch_json(
+            "https://shape.com/x", source="shape", cache_ttl=60
+        ) is None
+
+    assert route.call_count == 3
+    assert providers.provider_status()["shape"] == "down"
+    assert "https://shape.com/x" not in providers._cache
+
+
+@pytest.mark.parametrize("payload", [[], "unexpected", 1, True, None])
+async def test_non_object_json_is_never_cached(respx_mock, payload):
+    route = respx_mock.get("https://shape-once.com/x").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+
+    assert await providers.fetch_json(
+        "https://shape-once.com/x", source="shape-once", cache_ttl=60
+    ) is None
+    assert route.call_count == 1
+    assert "https://shape-once.com/x" not in providers._cache
+
+
+def test_dateline_distance_is_local_and_symmetric():
+    east = (0.0, 179.9)
+    west = (0.0, -179.9)
+
+    assert _km(east, west) == pytest.approx(22.24, rel=0.02)
+    assert _km(east, west) == pytest.approx(_km(west, east))
