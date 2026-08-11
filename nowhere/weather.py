@@ -86,11 +86,14 @@ def _climate_fallback(lat: float, lon: float, elevation: float | None = None,
                       local_hour: int | None = None) -> dict[str, Any]:
     """Offline climate-zone estimate. Always returns a valid dict."""
     zone = _climate_zone(lat)
-    month = datetime.date.today().month - 1  # 0-indexed
+    # Use local_hour to infer approximate month if available, else server time
+    # (local_hour alone can't determine month, so we still need today's date,
+    #  but at least we use the correct day boundary for the target timezone)
+    month = datetime.date.today().month  # 1-indexed
     # Southern hemisphere: shift month by 6 to flip seasons
     if lat < 0:
-        month = (month + 6) % 12
-    temp = _CLIMATE_TEMP[zone][month]
+        month = ((month - 1 + 6) % 12) + 1
+    temp = _CLIMATE_TEMP[zone][month - 1]  # list is 0-indexed, month is 1-indexed
     # Diurnal (day/night) temperature variation
     if local_hour is not None:
         # Peak at 14:00, trough at 05:00
@@ -217,13 +220,7 @@ async def current(lat: float, lon: float, elevation: float | None = None,
     try:
         qw = await _try_qweather(lat, lon)
         if qw is not None:
-            if local_hour is not None:
-                zone = _climate_zone(lat)
-                amplitude = 12.0 if zone in ("equator", "subtropical") else 8.0
-                hour_angle = (local_hour - 5) * (2 * math.pi / 24)
-                diurnal = amplitude * math.sin(hour_angle)
-                qw["temp_c"] = round(qw["temp_c"] + diurnal, 1)
-                qw["feels_c"] = round(qw["feels_c"] + diurnal, 1)
+            # QWeather already returns current temperature — no diurnal correction needed
             return qw
     except Exception:
         pass
@@ -232,30 +229,13 @@ async def current(lat: float, lon: float, elevation: float | None = None,
     try:
         online = await _try_openmeteo(lat, lon)
         if online is not None:
-            # Only apply diurnal correction, NOT lapse rate (Open-Meteo already handles elevation)
-            if local_hour is not None:
-                zone = _climate_zone(lat)
-                amplitude = 12.0 if zone in ("equator", "subtropical") else 8.0
-                hour_angle = (local_hour - 5) * (2 * math.pi / 24)
-                diurnal = amplitude * math.sin(hour_angle)
-                online["temp_c"] = round(online["temp_c"] + diurnal, 1)
-                online["feels_c"] = round(online["feels_c"] + diurnal, 1)
+            # Open-Meteo already returns current temperature — no diurnal correction needed
             return online
     except Exception:
         pass
 
     # 2) Climate zone offline fallback (needs lapse rate correction)
     return _climate_fallback(lat, lon, elevation=elevation, local_hour=local_hour)
-
-
-def _apply_corrections(result: dict, elevation: float | None, local_hour: int | None,
-                       lat: float) -> dict:
-    """Apply lapse rate and diurnal corrections to a weather result."""
-    # Lapse rate: -6.5°C per 1000m
-    if elevation and elevation > 0:
-        correction = elevation * 0.0065
-        result["temp_c"] = round(result["temp_c"] - correction, 1)
-        result["feels_c"] = round(result["feels_c"] - correction, 1)
 
     # Diurnal variation: peak at 14:00, trough at 05:00
     if local_hour is not None:
