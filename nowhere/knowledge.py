@@ -51,9 +51,14 @@ def _format_kb_entry(name: str, entry: dict) -> dict:
     Mixed entries (both shapes) are concatenated.
     """
     parts: list[str] = []
-    for key in ["一句话", "特色", "语言", "首都", "海拔"]:
+    for key in ["一句话", "特色", "语言", "首都"]:
         if key in entry and isinstance(entry[key], str):
             parts.append(entry[key])
+    # 海拔是结构化数据（如 "71m"），原样拼接会漏进散文，转成自然句
+    alt = entry.get("海拔")
+    if isinstance(alt, str) and alt:
+        m = re.match(r"([\d.]+)\s*m", alt.strip())
+        parts.append(f"海拔约 {m.group(1)} 米" if m else alt)
     cards = entry.get("card")
     if isinstance(cards, list):
         for c in cards:
@@ -61,7 +66,8 @@ def _format_kb_entry(name: str, entry: dict) -> dict:
                 content = c.get("content")
                 if isinstance(content, str) and content:
                     parts.append(content)
-    extract = "。".join(p for p in parts if p)
+    # 各字段自带句号, join 前去掉, 避免 "。。"
+    extract = "。".join(p.rstrip("。") for p in parts if p)
     return {
         "title": name,
         "extract": extract,
@@ -166,16 +172,19 @@ async def about(lat: float, lon: float, topic: str) -> dict | None:
     if title and title in kb:
         return _format_kb_entry(title, kb[title])
 
-    # Fuzzy match (contains)
+    # Fuzzy match (contains): 只允许"查询词是条目名的子串"。
+    # 反向(条目名是查询词子串)会让组合查询"洛杉矶 富士山"误命中"洛杉矶"。
     if title:
         for name, entry in kb.items():
-            if title in name or name in title:
+            if title in name:
                 return _format_kb_entry(name, entry)
 
-    # Try place name from coordinates
-    place_name = await _resolve_place_name(lat, lon)
-    if place_name and place_name in kb:
-        return _format_kb_entry(place_name, kb[place_name])
+    # 只在不带话题（"问问这里的事"）时才按坐标兜底到当前地名。
+    # 指定了话题（如"富士山"）但没查到, 交给 ask_impl 的组合查询/不知道。
+    if not title:
+        place_name = await _resolve_place_name(lat, lon)
+        if place_name and place_name in kb:
+            return _format_kb_entry(place_name, kb[place_name])
 
     # --- 2. Fall back to ZIM lookup ---
     if not title:

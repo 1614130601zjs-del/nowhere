@@ -143,6 +143,24 @@ def _load_scene_file(filename: str) -> dict[str, list[str]]:
     return getattr(_load_scene_file, cache_key)
 
 
+def _pick_fresh(pool: list[str], rng: random.Random) -> str | None:
+    """从场景池挑一条, 避开最近用过的文本(跨调用去重)。
+
+    全用过就退回整个池子。挑选结果记进 _state.recent_scenes,
+    供下次调用和 describe.render 复用。
+    """
+    if not pool:
+        return None
+    recent = set(_state.recent_scenes)
+    fresh = [t for t in pool if t not in recent]
+    if not fresh:
+        fresh = pool
+    pick = rng.choice(fresh)
+    _state.recent_scenes.append(pick)
+    _state.recent_scenes = _state.recent_scenes[-10:]
+    return pick
+
+
 def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Quick equirectangular distance, good enough for station stickiness."""
     dlat = math.radians(a[0] - b[0])
@@ -497,10 +515,14 @@ def _build_walk_narrative(
     narrative["distance_walked"] += dist_km * 1000
     walked = narrative["distance_walked"]
     if walked > 10000:
-        parts.append(f"你已经走了{walked / 1000:.0f}公里了。")
+        parts.append(f"你已经走了{walked / 1000:.0f}公里了。回头,来时的路已经看不见。")
         narrative["distance_walked"] = 0
     elif walked > 5000 and rng.random() < 0.3:
-        parts.append(f"又走了{dist_km:.1f}公里。")
+        parts.append(rng.choice([
+            "脚下的路又延伸了一截。",
+            "又走出几公里,路还在前面。",
+            "风里走了一段,路程拉长了。",
+        ]))
         narrative["distance_walked"] = 0
 
     # ── 4. Discovery ──────────────────────────────────────────────────
@@ -673,16 +695,20 @@ def _build_salience_candidates(
             "payload": s,
         })
 
-    # radio (optional)
+    # radio (optional) — 只在电台变化时作为候选（开门到达 / 换台 / 走远 50km）。
+    # 同台复读时完全排除，避免"KCRW 在播…"每步都占 salience 名额。
     r = env.get("radio")
     if r:
-        candidates.append({
-            "kind": "radio",
-            "delta": 1.0,
-            "novelty": 0.4,
-            "body_distance": 0.6,
-            "payload": r,
-        })
+        prev_r = (prev_env or {}).get("radio")
+        changed = prev_r is None or (prev_r.get("name") != r.get("name"))
+        if changed:
+            candidates.append({
+                "kind": "radio",
+                "delta": 1.0,
+                "novelty": 0.4,
+                "body_distance": 0.6,
+                "payload": r,
+            })
 
     # water features (optional)
     wf = env.get("water_features")
@@ -1045,6 +1071,9 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
     bearing, semantic, direction_invalid = _parse_bearing(direction)
     step_result = walk_mod.step(_state, bearing, semantic, distance_km)
 
+    # Advance simulated time: ~1 hour per 5km walking
+    _state.elapsed_hours += distance_km / 5.0
+
     # ── 2. Blocked → render blocked only ─────────────────────────────
     if step_result.get("blocked"):
         blocked_text = describe.render(
@@ -1203,22 +1232,28 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
         if not _had_local and place and len(sections) < 4:
             location_scenes = describe._load_location_scenes()
             if place in location_scenes:
-                sections.append(_rng.choice(location_scenes[place]))
-                _had_local = True
+                text = _pick_fresh(location_scenes[place], _rng)
+                if text:
+                    sections.append(text)
+                    _had_local = True
 
         # 3. Soundscape (always try if place has entries)
         if not _had_local and place and len(sections) < 4:
             soundscapes = _load_scene_file("scene_soundscape")
             if place in soundscapes:
-                sections.append(_rng.choice(soundscapes[place]))
-                _had_local = True
+                text = _pick_fresh(soundscapes[place], _rng)
+                if text:
+                    sections.append(text)
+                    _had_local = True
 
         # 4. Taste/smell (always try if place has entries)
         if not _had_local and place and len(sections) < 4:
             tastes = _load_scene_file("scene_taste")
             if place in tastes:
-                sections.append(_rng.choice(tastes[place]))
-                _had_local = True
+                text = _pick_fresh(tastes[place], _rng)
+                if text:
+                    sections.append(text)
+                    _had_local = True
 
         # 5. Generic biome fallback (only if no local content found)
         if not _had_local and len(sections) < 4:
@@ -1246,7 +1281,8 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
     local_dt = None
     if tz_name and now is not None:
         local_dt = now.astimezone(ZoneInfo(tz_name))
-        rhythm = localcolor.rhythm_event(_state.place_name, local_dt.hour, _rng, local_dt.month)
+        rhythm = localcolor.rhythm_event(_state.place_name, local_dt.hour, _rng, local_dt.month,
+                                        recent=_state.recent_scenes)
         if rhythm:
             sections.append(rhythm)
 
@@ -1296,7 +1332,7 @@ async def walk_impl(direction: str = "forward", distance_km: float = 2.0) -> dic
     # Not a backpack — just something you're carrying.
     # 留白: 跳过 souvenir——不属于"遇见"
     if not quiet:
-        souvenir_chance = 0.25 if len(_state.path) <= 1 else 0.15
+        souvenir_chance = 0.5 if len(_state.path) <= 1 else 0.3
         if _state.souvenir is None and _rng.random() < souvenir_chance:
             souvenir = _pick_souvenir(lat, lon, env, _rng)
             if souvenir:
@@ -1535,12 +1571,16 @@ async def look_around_impl() -> dict:
     # ── 3. Soundscape (from scene_soundscape.txt) ───────────────────
     soundscapes = _load_scene_file("scene_soundscape")
     if place in soundscapes:
-        sections.append(_rng.choice(soundscapes[place]))
+        text = _pick_fresh(soundscapes[place], _rng)
+        if text:
+            sections.append(text)
 
     # ── 4. Taste/smell (from scene_taste.txt) - 40% chance ──────────
     tastes = _load_scene_file("scene_taste")
     if place in tastes and _rng.random() < 0.4:
-        sections.append(_rng.choice(tastes[place]))
+        text = _pick_fresh(tastes[place], _rng)
+        if text:
+            sections.append(text)
 
     # ── 5. Life encounter - 50% chance ──────────────────────────────
     if _rng.random() < 0.5:
@@ -1675,7 +1715,8 @@ async def wait_impl(hours: float = 1.0) -> dict:
         tz_name = _tf.timezone_at(lat=lat, lng=lon)
         if tz_name and _state.now() is not None:
             local_dt = _state.now().astimezone(ZoneInfo(tz_name))
-            rhythm = localcolor.rhythm_event(_state.place_name, local_dt.hour, _rng, local_dt.month)
+            rhythm = localcolor.rhythm_event(_state.place_name, local_dt.hour, _rng, local_dt.month,
+                                        recent=_state.recent_scenes)
             if rhythm:
                 sections.append(rhythm)
 
@@ -1895,6 +1936,8 @@ async def walk_to_impl(place: str) -> dict:
         arrived = False
 
     # ── 更新状态 ─────────────────────────────────────────────────────
+    # Advance simulated time: ~1 hour per 5km walking
+    _state.elapsed_hours += total_km / 5.0
     now = _state.now()
     lat, lon = _state.pos
     env, _ = await _gather_env_cached(lat, lon, now)
@@ -2212,6 +2255,22 @@ def give_souvenir() -> dict:
 
 
 @mcp.tool()
+def postcards() -> dict:
+    """看看收到的明信片。来自不同时空的问候。"""
+    cards = _state.postcards
+    if not cards:
+        return {"text": "还没收到过明信片。空空的。", "data": {"postcards": []}}
+    parts = []
+    for c in cards:
+        who = c.get("from_place", "远方")
+        msg = c.get("message", "")
+        time_str = c.get("local_time", "")
+        parts.append(f"来自{who}（{time_str}）：{msg}")
+    text = f"你收到了 {len(cards)} 张明信片。\n" + "\n---\n".join(parts)
+    return {"text": text, "data": {"postcards": cards}}
+
+
+@mcp.tool()
 async def walk_to(place: str) -> dict:
     """朝一个命名地点走过去(山/河/城/古迹)。探索从此有方向。"""
     return await walk_to_impl(place)
@@ -2235,7 +2294,8 @@ def send_postcard(text: str) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Nowhere MCP server")
-    parser.add_argument("--web", type=int, default=None, help="Web observer port")
+    parser.add_argument("--web", type=int, default=None, help="Web observer port (with MCP)")
+    parser.add_argument("--web-only", type=int, default=None, help="Web observer port (standalone, no MCP)")
     args = parser.parse_args()
 
     # Preload ZIM in background (non-blocking)
@@ -2247,7 +2307,11 @@ if __name__ == "__main__":
             pass
     threading.Thread(target=_preload_zim, daemon=True).start()
 
-    if args.web is not None:
+    if args.web_only is not None:
+        import uvicorn
+        from nowhere.web import app as web_app
+        uvicorn.run(web_app, host="0.0.0.0", port=args.web_only, log_level="info")
+    elif args.web is not None:
         import uvicorn
         from nowhere.web import app as web_app
 

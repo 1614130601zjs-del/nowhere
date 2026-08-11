@@ -487,52 +487,52 @@ _WEATHER_DELTA_VARIANTS: list[str] = [
 ]
 
 _TERRAIN_VARIANTS: list[str] = [
-    "脚下是{surface_desc}{slope_clause}。海拔 {elevation} 米{delta_clause}。",
-    "{surface_desc}{slope_clause},就在脚下。海拔 {elevation} 米{delta_clause}。",
-    "脚下的地是{surface_desc}{slope_clause}。{elevation} 米{delta_clause}。",
+    "脚下是{surface_desc}{slope_clause}。{elev_clause}。",
+    "{surface_desc}{slope_clause},就在脚下。{elev_clause}。",
+    "脚下的地是{surface_desc}{slope_clause}。{elev_clause}。",
 ]
 
 _TERRAIN_SCREE_VARIANTS: list[str] = [
-    "脚下是{surface_desc}堆的坡,松的。每一步踩下去,都先滑半步,才吃住劲。海拔 {elevation} 米{delta_clause}。",
-    "{surface_desc},松的。坡 {slope_deg} 度,每往上一步,都要付一点代价。海拔 {elevation} 米{delta_clause}。",
-    "坡是{surface_desc}堆出来的,松的,{slope_deg} 度。走一步,滑半步。海拔 {elevation} 米{delta_clause}。",
+    "脚下是{surface_desc}堆的坡,松的。每一步踩下去,都先滑半步,才吃住劲。{elev_clause}。",
+    "{surface_desc},松的。坡 {slope_deg} 度,每往上一步,都要付一点代价。{elev_clause}。",
+    "坡是{surface_desc}堆出来的,松的,{slope_deg} 度。走一步,滑半步。{elev_clause}。",
 ]
 
 _TERRAIN_FLAT_VARIANTS: list[str] = [
-    "脚下是{surface_desc},平的,走起来不费力气。海拔 {elevation} 米{delta_clause}。",
-    "地是{surface_desc},平的。海拔 {elevation} 米{delta_clause}。",
-    "{surface_desc}铺开去,远处看不见头。海拔 {elevation} 米{delta_clause}。",
+    "脚下是{surface_desc},平的,走起来不费力气。{elev_clause}。",
+    "地是{surface_desc},平的。{elev_clause}。",
+    "{surface_desc}铺开去,远处看不见头。{elev_clause}。",
 ]
 
 _TERRAIN_FLAT_GRASS_VARIANTS: list[str] = [
-    "{surface_desc},一马平川。海拔 {elevation} 米{delta_clause}。",
-    "草地平展展的,风一吹像水面。海拔 {elevation} 米{delta_clause}。",
-    "{surface_desc}延伸到天际线。海拔 {elevation} 米{delta_clause}。",
+    "{surface_desc},一马平川。{elev_clause}。",
+    "草地平展展的,风一吹像水面。{elev_clause}。",
+    "{surface_desc}延伸到天际线。{elev_clause}。",
 ]
 
 # 裸地/沙地用这些
 _TERRAIN_FLAT_BARE_VARIANTS: list[str] = [
-    "{surface_desc}一眼望不到头,平的。海拔 {elevation} 米{delta_clause}。",
-    "平的,但脚下的{surface_desc}每一块都不一样。海拔 {elevation} 米{delta_clause}。",
-    "地是{surface_desc},平的,风把什么都吹走了。海拔 {elevation} 米{delta_clause}。",
+    "{surface_desc}一眼望不到头,平的。{elev_clause}。",
+    "平的,但脚下的{surface_desc}每一块都不一样。{elev_clause}。",
+    "地是{surface_desc},平的,风把什么都吹走了。{elev_clause}。",
 ]
 
 _TERRAIN_FLAT_ROCK_VARIANTS: list[str] = [
-    "{surface_desc}延伸到远处,平的。海拔 {elevation} 米{delta_clause}。",
-    "碎石平铺,没有坡。海拔 {elevation} 米{delta_clause}。",
-    "岩石平着铺开,风在上面走。海拔 {elevation} 米{delta_clause}。",
+    "{surface_desc}延伸到远处,平的。{elev_clause}。",
+    "碎石平铺,没有坡。{elev_clause}。",
+    "岩石平着铺开,风在上面走。{elev_clause}。",
 ]
 
 _TERRAIN_FLAT_URBAN_VARIANTS: list[str] = [
-    "硬化路面延伸到远处,平的。海拔 {elevation} 米{delta_clause}。",
-    "马路平的,车在跑。海拔 {elevation} 米{delta_clause}。",
-    "路沿石被磨得发亮。海拔 {elevation} 米{delta_clause}。",
+    "硬化路面延伸到远处,平的。{elev_clause}。",
+    "马路平的,车在跑。{elev_clause}。",
+    "路沿石被磨得发亮。{elev_clause}。",
 ]
 
 _TERRAIN_FLAT_WATER_VARIANTS: list[str] = [
-    "水面平得像镜子。海拔 {elevation} 米{delta_clause}。",
-    "{surface_desc},平的,没有一丝褶皱。海拔 {elevation} 米{delta_clause}。",
-    "水平如镜。海拔 {elevation} 米{delta_clause}。",
+    "水面平得像镜子。{elev_clause}。",
+    "{surface_desc},平的,没有一丝褶皱。{elev_clause}。",
+    "水平如镜。{elev_clause}。",
 ]
 
 _TERRAIN_HIGH_FLAT_VARIANTS: list[str] = [
@@ -906,20 +906,36 @@ def _scene_for_kind(kind: str, payload: dict, rng: random.Random,
 
 
 def compose(sections: list[str], rng: random.Random) -> str:
-    """把渲染好的段落拼成一份身体报告。段落间给过渡,但不抢戏。"""
+    """把渲染好的段落拼成一份身体报告。段落间给过渡,但不抢戏。
+
+    - 空位占两个, "无过渡"更常见, 减少机械感
+    - 同一条报告内已用过的过渡词不重复
+    - 以"你"开头的动作句只用动作类过渡("同时,"/"走着走着,"),
+      避免"远处,你转身往北走"这种场景词修饰动作的错配
+    """
     sections = [s for s in sections if s and s.strip()]
     if not sections:
         return ""
 
-    transitions = ["", "同时,", "头顶上,", "风里,", "远处,", "走着走着,"]
+    transitions = ["", "", "同时,", "头顶上,", "风里,", "远处,", "走着走着,"]
+    action_transitions = ["", "同时,", "走着走着,"]
 
     parts: list[str] = []
+    used: set[str] = set()
     for i, s in enumerate(sections):
         if i == 0:
             parts.append(s)
+            continue
+        if s.startswith("你"):
+            pool = [t for t in action_transitions if t == "" or t not in used]
         else:
-            t = _pick(transitions, rng)
-            parts.append(t + s)
+            pool = [t for t in transitions if t == "" or t not in used]
+        if not pool:
+            pool = [""]
+        t = _pick(pool, rng)
+        if t:
+            used.add(t)
+        parts.append(t + s)
 
     return "".join(parts)
 
@@ -1029,12 +1045,21 @@ def _render_terrain(payload: dict, prev: dict | None, rng: random.Random) -> str
 
     surface_desc = _SURFACE_DESC.get(surface_key, surface_key)
 
-    if elevation_delta > 0:
-        delta_clause = f",又抬高了 {round(elevation_delta)} 米"
-    elif elevation_delta < 0:
-        delta_clause = f",又落下了 {abs(round(elevation_delta))} 米"
+    # 海拔只在"变了"或"本身高"时提, 平原复读时省略, 避免每步"海拔 300 米"
+    d_round = round(elevation_delta)  # 先四舍五入, 过滤网格的亚米级噪声
+    if d_round > 0:
+        elev_clause = f"海拔 {elevation} 米,又抬高了 {d_round} 米"
+    elif d_round < 0:
+        elev_clause = f"海拔 {elevation} 米,又落下了 {abs(d_round)} 米"
+    elif elevation >= 1000:
+        elev_clause = f"海拔 {elevation} 米"
     else:
-        delta_clause = ""
+        elev_clause = ""
+    delta_clause = (
+        f",又抬高了 {round(elevation_delta)} 米" if elevation_delta > 0
+        else f",又落下了 {abs(round(elevation_delta))} 米" if elevation_delta < 0
+        else ""
+    )
 
     result = ""
 
@@ -1043,37 +1068,41 @@ def _render_terrain(payload: dict, prev: dict | None, rng: random.Random) -> str
         result = tmpl.format(
             surface_desc=surface_desc,
             slope_deg=round(slope_deg),
-            elevation=elevation,
-            delta_clause=delta_clause,
+            elev_clause=elev_clause,
         )
     elif slope_deg < 1.0:
         if elevation > 2500:
+            # 高海拔变体把"稀薄/喘"当主题, 海拔必须提
             tmpl = _pick(_TERRAIN_HIGH_FLAT_VARIANTS, rng)
-        elif surface_key in ("bare", "sand"):
-            tmpl = _pick(_TERRAIN_FLAT_BARE_VARIANTS, rng)
-        elif surface_key == "rock":
-            tmpl = _pick(_TERRAIN_FLAT_ROCK_VARIANTS, rng)
-        elif surface_key == "urban":
-            tmpl = _pick(_TERRAIN_FLAT_URBAN_VARIANTS, rng)
-        elif surface_key in ("water_ocean", "water_fresh"):
-            tmpl = _pick(_TERRAIN_FLAT_WATER_VARIANTS, rng)
-        elif surface_key == "grass":
-            tmpl = _pick(_TERRAIN_FLAT_GRASS_VARIANTS, rng)
+            result = tmpl.format(
+                surface_desc=surface_desc,
+                elevation=elevation,
+                delta_clause=delta_clause,
+            )
         else:
-            tmpl = _pick(_TERRAIN_FLAT_VARIANTS, rng)
-        result = tmpl.format(
-            surface_desc=surface_desc,
-            elevation=elevation,
-            delta_clause=delta_clause,
-        )
+            if surface_key in ("bare", "sand"):
+                tmpl = _pick(_TERRAIN_FLAT_BARE_VARIANTS, rng)
+            elif surface_key == "rock":
+                tmpl = _pick(_TERRAIN_FLAT_ROCK_VARIANTS, rng)
+            elif surface_key == "urban":
+                tmpl = _pick(_TERRAIN_FLAT_URBAN_VARIANTS, rng)
+            elif surface_key in ("water_ocean", "water_fresh"):
+                tmpl = _pick(_TERRAIN_FLAT_WATER_VARIANTS, rng)
+            elif surface_key == "grass":
+                tmpl = _pick(_TERRAIN_FLAT_GRASS_VARIANTS, rng)
+            else:
+                tmpl = _pick(_TERRAIN_FLAT_VARIANTS, rng)
+            result = tmpl.format(
+                surface_desc=surface_desc,
+                elev_clause=elev_clause,
+            )
     else:
         slope_clause = f",坡 {round(slope_deg)} 度"
         tmpl = _pick(_TERRAIN_VARIANTS, rng)
         result = tmpl.format(
             surface_desc=surface_desc,
             slope_clause=slope_clause,
-            elevation=elevation,
-            delta_clause=delta_clause,
+            elev_clause=elev_clause,
         )
 
     # Append touch description
@@ -1085,6 +1114,9 @@ def _render_terrain(payload: dict, prev: dict | None, rng: random.Random) -> str
     smell_pool = _SMELL_BY_BIOME.get(biome, _SMELL_BY_BIOME.get(surface_key, []))
     if smell_pool:
         result += rng.choice(smell_pool) + "。"
+
+    # 海拔省略后模板可能留下"。。"
+    result = result.replace("。。", "。")
 
     return result
 
@@ -1270,6 +1302,7 @@ _GENRE_ZH: dict[str, str] = {
     "latin": "拉丁", "world": "世界音乐", "gospel": "福音", "metal": "金属",
     "music": "音乐", "pop music": "流行", "local music": "本地音乐",
     "classic hits": "经典热门", "adult contemporary": "成人当代",
+    "eclectic": "杂糅", "eclectic/news": "杂糅新闻", "variety": "综合",
 }
 
 
@@ -1277,7 +1310,8 @@ def _genre_zh(genre: str) -> str:
     """电台流派标签中译,查不到的原样保留。"""
     if not genre:
         return "音乐"
-    parts = [g.strip() for g in genre.split(",") if g.strip()]
+    # 逗号和斜杠都算分隔, 让 "eclectic/news" 拆成两个词各自翻译
+    parts = [g.strip() for g in genre.replace("/", ",").split(",") if g.strip()]
     zh = [_GENRE_ZH.get(g.lower(), g) for g in parts[:3]]
     return "、".join(zh) if zh else "音乐"
 

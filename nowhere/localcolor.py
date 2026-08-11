@@ -98,11 +98,13 @@ def rhythm_event(
     local_hour: int,
     rng: random.Random,
     month: int | None = None,
+    recent: list[str] | None = None,
 ) -> str | None:
     """当前时刻命中的节律文案,没有 → None。
 
     卡可带 "months": [月份列表],带了就只在那些月出现(极昼/极光/
     三文鱼季这种季节限定);没带 = 全年有效。
+    recent: 最近出现过的文案, 跳过它们避免每步复读同一张卡。
     """
     if not place_name:
         return None
@@ -121,4 +123,13 @@ def rhythm_event(
         if months and month is not None and month not in months:
             continue
         hits.append(r["text"])
-    return rng.choice(hits) if hits else None
+    if not hits:
+        return None
+    recent_set = set(recent or [])
+    if recent_set:
+        fresh = [h for h in hits if h not in recent_set]
+        if not fresh:
+            # 当前时刻的卡全在 recent 里 → 安静比复读同一张卡好
+            return None
+        hits = fresh
+    return rng.choice(hits)
