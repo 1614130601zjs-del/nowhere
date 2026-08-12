@@ -1,25 +1,29 @@
 import os
-from fastapi import FastAPI
+from starlette.routing import Mount
 from nowhere.server import mcp
 from nowhere.web import app as web_app
 
 port = int(os.environ.get("PORT", 8000))
 
-# 1. 创建 MCP 的 ASGI app
-#    path="/" 表示不在内部再加前缀，fastmcp 内部会自动注册 /mcp 路由
-mcp_app = mcp.http_app(path="/")
+# 获取 FastMCP 的 HTTP ASGI app
+mcp_app = mcp.http_app(path="/mcp")
 
-# 2. 创建主 FastAPI 应用，传入 mcp_app.lifespan
-app = FastAPI(lifespan=mcp_app.lifespan)
+# 关键：关闭 Starlette 的自动斜杠重定向（307 的根源）
+if hasattr(mcp_app, 'redirect_slashes'):
+    mcp_app.redirect_slashes = False
 
-# 3. 先挂载 mcp_app 到 "/mcp"
-#    FastAPI 的 Mount 匹配是严格前缀 + 最长匹配优先，且一旦命中就终止后续匹配
-#    所以 /mcp 开头的请求会先被这里拦截，交给 mcp_app 处理
-app.mount("/mcp", mcp_app)
-
-# 4. 再挂载 web_app 到 "/"（兜底处理 /、/state、/static 等）
-#    由于 /mcp 已经被上面的 mount 拦截，这里只会处理非 /mcp 开头的请求
-app.mount("/", web_app)
+# 把 Web 前端挂载为 fallback：
+# FastMCP 内部路由先匹配 /mcp，其他所有路径（/、/state、/static）fallback 给 Web
+if hasattr(mcp_app, 'routes'):
+    mcp_app.routes.append(Mount("/", app=web_app))
+    app = mcp_app
+else:
+    # 保险 fallback
+    from starlette.applications import Starlette
+    app = Starlette(routes=[
+        Mount("/mcp", app=mcp_app),
+        Mount("/", app=web_app),
+    ])
 
 if __name__ == "__main__":
     import uvicorn
