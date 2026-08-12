@@ -7,18 +7,29 @@ Nowhere MCP + Web 合并入口
 """
 
 import os
-from starlette.applications import Starlette
-from starlette.routing import Mount
 from nowhere.server import mcp          # 导入即注册所有 tool
 from nowhere.web import app as web_app  # 原作者的 Starlette 前端
 
 port = int(os.environ.get("PORT", 8000))
 
-# fastmcp v3 的 mcp 对象本身就是 ASGI app，直接挂载到 /mcp
-app = Starlette(routes=[
-    Mount("/mcp", app=mcp),
-    Mount("/", app=web_app),
-])
+class CombinedApp:
+    """
+    路由分发器：
+    - 路径以 /mcp 开头  -> 交给 MCP 处理（保留 /mcp 前缀）
+    - 其他所有路径       -> 交给 Web 处理
+    """
+    def __init__(self, mcp_part, web_part):
+        self.mcp = mcp_part
+        self.web = web_part
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if path.startswith("/mcp"):
+            await self.mcp(scope, receive, send)
+        else:
+            await self.web(scope, receive, send)
+
+app = CombinedApp(mcp, web_app)
 
 if __name__ == "__main__":
     import uvicorn
