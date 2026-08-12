@@ -1,35 +1,38 @@
-#!/usr/bin/env python3
-"""
-Nowhere MCP + Web 合并入口
-
-- /mcp  -> MCP Streamable HTTP（手机/AI 客户端接入）
-- /     -> Web 前端（地图、状态、明信片墙，和 MCP 共享内存状态）
-"""
-
 import os
-from starlette.applications import Starlette
-from starlette.routing import Mount, Route
-from starlette.responses import RedirectResponse
-from nowhere.server import mcp          # 导入即注册所有 tool
-from nowhere.web import app as web_app  # 原作者的 Starlette 前端
+from nowhere.server import mcp
+from nowhere.web import app as web_app
 
 port = int(os.environ.get("PORT", 8000))
 
-# FastMCP v3: 获取真正的 ASGI app（mcp 对象本身不是 callable）
-raw_mcp = mcp.http_app(path="/")
+# 获取 MCP 的 ASGI app（注意：mcp 对象本身不是 callable）
+mcp_app = mcp.http_app(path="/mcp")
 
-# /mcp 重定向到 /mcp/（避免缺少尾部斜杠失败）
-def redirect_mcp(request):
-    return RedirectResponse(str(request.url.replace(path="/mcp/")), status_code=307)
+class CombinedApp:
+    def __init__(self):
+        self.mcp = mcp_app
+        self.web = web_app
+    
+    async def __call__(self, scope, receive, send):
+        # lifespan 只给 web_app（MCP 不需要）
+        if scope["type"] == "lifespan":
+            await self.web(scope, receive, send)
+            return
+        
+        path = scope.get("path", "")
+        
+        # MCP 端点：/mcp 或 /mcp/ 开头的都交给 MCP
+        if path == "/mcp":
+            # fastmcp 内部只认 /mcp/，自动补斜杠
+            new_scope = dict(scope)
+            new_scope["path"] = "/mcp/"
+            await self.mcp(new_scope, receive, send)
+        elif path.startswith("/mcp/"):
+            await self.mcp(scope, receive, send)
+        else:
+            # 其他所有路径给 Web（/、/state、/static 等）
+            await self.web(scope, receive, send)
 
-app = Starlette(
-    routes=[
-        Route("/mcp", endpoint=redirect_mcp, methods=["GET", "POST", "DELETE"]),
-        Mount("/mcp", app=raw_mcp),
-        Mount("/", app=web_app),
-    ],
-    lifespan=raw_mcp.lifespan,
-)
+app = CombinedApp()
 
 if __name__ == "__main__":
     import uvicorn
